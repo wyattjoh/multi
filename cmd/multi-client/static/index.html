@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<head>
+  <meta charset="utf-8">
+  <style media="screen">
+    canvas {
+      width: 500px;
+      height: 500px;
+      margin: 50px auto;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas" width="500" height="500"></canvas>
+  <script type="text/javascript">
+    class Circle {
+      constructor(centerX, centerY, radius) {
+        this.centerX = centerX;
+        this.centerY = centerY;
+        this.radius = radius;
+      }
+
+      draw(context) {
+        context.beginPath();
+        context.arc(this.centerX, this.centerY, this.radius, 0, 2 * Math.PI, false);
+        context.fillStyle = 'green';
+        context.fill();
+      }
+    }
+
+    class Line {
+      constructor(startX, startY, endX, endY) {
+        this.startX = startX;
+        this.startY = startY;
+        this.endX = endX;
+        this.endY = endY;
+      }
+
+      draw(context) {
+        context.beginPath();
+        context.moveTo(this.startX, this.startY);
+        context.lineTo(this.endX, this.endY);
+        context.lineWidth = 1;
+        context.strokeStyle = 'white';
+        context.stroke();
+      }
+    }
+
+    class CompassCircle {
+      constructor(centerX, centerY, radius, angle = 0) {
+        this.ring = new Circle(centerX, centerY, radius);
+        this.angle = angle;
+
+        let {x, y} = this.needlePosition();
+
+        this.needle = new Line(centerX, centerY, 0, 0);
+      }
+
+      needlePosition() {
+        return {
+          x: Math.cos((Math.PI * this.angle) / 180) * this.ring.radius + this.ring.centerX,
+          y: Math.sin((Math.PI * this.angle) / 180) * this.ring.radius + this.ring.centerY
+        };
+      }
+
+      draw(context) {
+        this.ring.draw(context);
+
+        let {x, y} = this.needlePosition();
+
+        this.needle.endX = x;
+        this.needle.endY = y;
+
+        this.needle.draw(context);
+      }
+    }
+
+    class Client {
+      constructor({width, height}, {i, p}, radius) {
+        this.i = i;
+        this.p = p;
+
+        this.row = Math.floor((i - 1) / 6.0);
+        this.column = (i - 1) % 6;
+
+        this.startY = (height/6) * this.row + radius;
+        this.startX = (width/6) * this.column + radius;
+
+        this.circle = new CompassCircle(this.startX, this.startY, radius, this.p);
+      }
+
+      draw(context) {
+        this.circle.draw(context);
+        context.fillStyle = 'black';
+        context.font = '20px serif';
+        context.fillText(this.i, this.circle.ring.centerX - 5, this.circle.ring.centerY + 5, 10);
+      }
+    }
+
+    class Game {
+      constructor(context) {
+        this.context = context;
+        this.canvas = canvas;
+        this.state = {};
+      }
+
+      clearCanvas() {
+        this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      }
+
+      setState(state) {
+        this.state = state;
+
+        this.state.clients = Object.keys(this.state.clients).map((clientID) => {
+          return new Client(this.canvas, this.state.clients[clientID], 20)
+        });
+      }
+
+      draw() {
+        this.clearCanvas();
+
+        this.state.clients.forEach((client) => {
+          client.draw(this.context);
+        })
+      }
+    }
+
+    class World {
+      start(host) {
+        this.canvas = document.getElementById('canvas');
+        this.context = canvas.getContext('2d');
+        this.game = new Game(this.context, this.canvas);
+
+        this._commands = {left: false, right: false};
+        this._lastMessage = '';
+        this._lastRepeatMS = Math.floor((new Date()).getTime());
+
+        window.addEventListener('keyup', (event) => this.handleKey(false, event), false);
+        window.addEventListener('keydown', (event) => this.handleKey(true, event), false);
+
+        this.ws = new WebSocket(`ws://${host}/ws`);
+
+        this.ws.onopen = (evt) => {
+          console.log('OPEN');
+
+          // Start up the event loop to send off commands to the client.
+          this.sendCommands();
+        };
+
+        this.ws.onclose = (evt) => {
+          console.log('CLOSE');
+
+          this.ws = null;
+        };
+
+        this.ws.onmessage = (evt) => {
+          console.log('RESPONSE: ' + evt.data);
+
+          let state = JSON.parse(evt.data);
+          this.game.setState(state);
+          this.game.draw();
+        };
+
+        this.ws.onerror = (evt) => {
+          console.log('ERROR: ' + evt.data);
+        };
+      }
+
+      handleKey(press, event) {
+        switch (event.keyCode) {
+          case 37:
+            this._commands.left = press;
+            break;
+
+          case 39:
+            this._commands.right = press;
+            break;
+        }
+      }
+
+      send(message) {
+        console.log('SENT: ' + message);
+        this.ws.send(message);
+      }
+
+      sendCommands() {
+
+        let nowMS = Math.floor((new Date()).getTime());
+        let message = (this._commands.left ? 'M;L' : (this._commands.right ? 'M;R' : 'M;'));
+
+        if (message && ((this._lastMessage != message) || (nowMS - this._lastRepeatMS > 200))) {
+          this.send(message);
+          this._lastMessage = message;
+          this._lastRepeatMS = nowMS;
+        }
+
+        setTimeout(() => this.sendCommands(), 50);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const world = new World();
+
+      fetch('/host')
+        .then((res) => res.text())
+        .then((host) => {
+          world.start(host);
+        });
+    });
+  </script>
+</body>
+</html>
